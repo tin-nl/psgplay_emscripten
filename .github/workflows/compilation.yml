@@ -1,42 +1,84 @@
-name: build
+name: Compile PSG play
 
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   build-atari-st:
     runs-on: ubuntu-latest
     container: ghcr.io/frno7/gentoo-m68k:main
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Archive tag
         run: |
           echo "ARCHIVE_TAG=${GITHUB_REF_NAME}-${GITHUB_SHA:0:8}" >> $GITHUB_ENV
+
+      - name: Fix repository ownership problem
+        run: |
+          # Avoid fatal: unsafe repository (directory is owned by someone else)
+          # Confer https://github.com/actions/checkout/issues/760
+          git config --global --add safe.directory "*"
 
       - name: Compile PSGPLAY.TOS archive for the Atari ST
         env:
           TARGET_COMPILE: m68k-elf-
         run: |
           JOBS="$(getconf _NPROCESSORS_ONLN)"
-          git submodule update --init --recursive
           make -j"$JOBS" V=1 S=1 PSGPLAY.TOS
 
       - name: Publish PSGPLAY.TOS archive for the Atari ST
         if: ${{ success() }}
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: "psgplay-atari-st-${{ env.ARCHIVE_TAG }}"
+          if-no-files-found: error
+          compression-level: 9
           path: PSGPLAY.TOS
+
+  build-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Archive tag
+        run: |
+          echo "ARCHIVE_TAG=${GITHUB_REF_NAME}-${GITHUB_SHA:0:8}" >> $GITHUB_ENV
+
+      - uses: mymindstorm/setup-emsdk@v14
+
+      - name: Compile web assembly archive
+        run: |
+          JOBS="$(getconf _NPROCESSORS_ONLN)"
+          make -j"$JOBS" V=1 HOST_CC=emcc web
+
+      - name: Publish web assembly archive
+        if: ${{ success() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: "psgplay-web-${{ env.ARCHIVE_TAG }}"
+          if-no-files-found: error
+          compression-level: 9
+          path: |
+            lib/psgplay/libpsgplay.js
+            lib/psgplay/libpsgplay.wasm
 
   build-linux:
     strategy:
+      fail-fast: false  # 'false' means don't stop if some archs fail.
       matrix:
         arch: [ppc64le, aarch64, x86_64]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Archive tag
         run: |
@@ -53,11 +95,10 @@ jobs:
             apt-get update -q -y
             apt-get install -q -y git make gcc libc-dev xxd libasound2 libasound2-dev
           run: |
-            JOBS="$(getconf _NPROCESSORS_ONLN)"
             # Avoid fatal: unsafe repository (directory is owned by someone else)
-            git config --global --add safe.directory "$PWD"
-            git config --global --add safe.directory "$PWD"/lib/toslibc
-            git submodule update --init --recursive
+            # Confer https://github.com/actions/checkout/issues/760
+            git config --global --add safe.directory "*"
+            JOBS="$(getconf _NPROCESSORS_ONLN)"
             make -j"$JOBS" V=1 ALSA=1 all test
 
       - name: Compile PSG play archive for Linux/x86_64
@@ -66,14 +107,15 @@ jobs:
           sudo apt-get update -q -y
           sudo apt-get install -q -y git make gcc libc-dev xxd libasound2 libasound2-dev
           JOBS="$(getconf _NPROCESSORS_ONLN)"
-          git submodule update --init --recursive
           make -j"$JOBS" V=1 S=1 ALSA=1 all test
-          make V=1 S=1 ALSA=1 clean
+          git clean -fdx
           make -j"$JOBS" V=1 ALSA=1 psgplay
 
       - name: Publish PSG play archive for Linux
         if: ${{ success() }}
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: "psgplay-linux-${{ env.ARCHIVE_TAG }}"
+          if-no-files-found: error
+          compression-level: 9
           path: psgplay
